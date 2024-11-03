@@ -94,17 +94,23 @@ let totalBytesUploaded = 0;
 let startTime: number;
 let totalSize = 0;
 
-const ignore = ['/users/macuser/Library']
-const packs: Pack[] = [];
-let dirs = {};
-const uploadQueue: string[] = [];
-const filesSizes = {}
-
 interface Pack {
     files: string[],
     size: number,
     name: string
 }
+interface PackInfo {
+    name: string,
+    content: string
+}
+
+const ignore = ['/users/macuser/Library']
+const packs: Pack[] = [];
+const packsMeta: PackInfo[] = [];
+let dirs = {};
+const uploadQueue: string[] = [];
+const filesSizes = {}
+
 
 const visited = new Set();
 function readDirectoryRecursively(dir: string, isRoot = true) {
@@ -115,6 +121,13 @@ function readDirectoryRecursively(dir: string, isRoot = true) {
     const pushLastPack = () => {
         uploadQueue.push(packs[packs.length - 1].name);
         filesSizes[packs[packs.length - 1].name] = packs[packs.length - 1].size;
+        
+        const packInfoName = packs[packs.length - 1].name + '.json';
+        const packInfo = JSON.stringify(packs[packs.length - 1]);
+        packsMeta.push({name: packInfoName, content: packInfo});
+        
+        uploadQueue.push(packInfoName);
+        filesSizes[packInfoName] = packInfo.length;
     }
 
     readdirSync(dir).forEach(file => {
@@ -161,8 +174,6 @@ function readDirectoryRecursively(dir: string, isRoot = true) {
     }
 }
 
-
-
 function createDirectory(dir: string) {
     if (dir === '.' || dir === '/' || dir.endsWith(':\\')) {
         return Promise.resolve();
@@ -173,7 +184,11 @@ function createDirectory(dir: string) {
 
         dirs[dir] = (async () => {
             await createDirectory(path.dirname(dir));
-            await client(0).createDirectory(winToLinux(dir));
+            try {
+                await client(0).createDirectory(winToLinux(dir));
+            } catch (error) {
+                console.warn(error);
+            }
         })()
     }
 
@@ -222,9 +237,13 @@ async function uploadFile(file: string) {
     let data;
 
     const pack = packs.find(pack => pack.name === file)
+    const packInfo = packsMeta.find(packInfo => packInfo.name === file)
     if (pack) {
         data = await createArchive(pack);
-    } else {
+    } else if (packInfo) {
+        data = packInfo.content;
+    }
+    else {
         data = createReadStream(file);
     }
 
@@ -252,6 +271,7 @@ async function manageUploads() {
     // 100mb and 100 files same time in queue
     // minimum 1 file in queue
     let batch = new Set<string>();
+    const _uploadQueue = uploadQueue.slice(-2000)
 
     let minQueuedBytes = 1000000; // 1mb
     let maxQueuedBytes = 20000000; // 10mb
@@ -268,7 +288,7 @@ async function manageUploads() {
         console.log(`Uploaded ${totalBytesUploaded / 1000000} mb in ${Date.now() - startTime}ms. Speed: ${speed / 1000000} mb/s.`);
 
         const queuedBytes = totalBytesBatched - totalBytesUploaded;
-        console.log(`Batched ${batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${limitBatchSize}, limitQueuedBytes: ${limitQueuedBytes / 1000000} mb, totalSize: ${totalSize / 1000000} mb, queue files: ${uploadQueue.length}`);
+        console.log(`Batched ${batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${limitBatchSize}, limitQueuedBytes: ${limitQueuedBytes / 1000000} mb, totalSize: ${totalSize / 1000000} mb, queue files: ${_uploadQueue.length}`);
         console.log(Array.from(batch).map(file => `${path.basename(file)} (${filesSizes[file] / 1000000} mb)`).join('\n'));
     }, 1000);
 
@@ -277,9 +297,9 @@ async function manageUploads() {
         const queuedBytes = totalBytesBatched - totalBytesUploaded;
 
         // 10mb
-        if (uploadQueue.length !== 0 && (queuedBytes < limitQueuedBytes && batch.size < limitBatchSize || batch.size === 0)) {
-            const file = uploadQueue.shift();
-            if (!file) throw new Error("uploadQueue is empty");
+        if (_uploadQueue.length !== 0 && (queuedBytes < limitQueuedBytes && batch.size < limitBatchSize || batch.size === 0)) {
+            const file = _uploadQueue.shift();
+            if (!file) throw new Error("_uploadQueue is empty");
 
             const fileSize = filesSizes[file];
             totalBytesBatched += fileSize;
@@ -299,7 +319,7 @@ async function manageUploads() {
                 limitQueuedBytes = Math.max(minQueuedBytes, limitQueuedBytes / 1.1);
 
                 totalBytesBatched -= fileSize;
-                uploadQueue.unshift(file);
+                _uploadQueue.unshift(file);
             });
         } else {
             await new Promise<void>((resolve, reject) => {
@@ -308,7 +328,7 @@ async function manageUploads() {
             });
         }
 
-        if (batch.size === 0 && uploadQueue.length === 0) {
+        if (batch.size === 0 && _uploadQueue.length === 0) {
             break
         }
     }
@@ -319,6 +339,5 @@ async function manageUploads() {
 
 readDirectoryRecursively(DIRECTORY_PATH);
 console.log(dirs);
-
 
 manageUploads().catch(console.error);
