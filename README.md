@@ -3,7 +3,7 @@
 **Optimized for faster uploads**
 
 ## Main Features:
-1. Small files are packaged into archives to speed up transmission (archives maintain the original project hierarchy).
+1. Small files are packaged into archives to speed up transmission (archives maintain the original folder hierarchy).
 2. The number of concurrently processed files is dynamically adjusted to maximize transfer speed.
 3. Data can be transferred to multiple WebDAV servers simultaneously.
 
