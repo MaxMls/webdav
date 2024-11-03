@@ -1,5 +1,4 @@
 import { createClient, type WebDAVClient } from 'webdav';
-import fs from 'fs/promises';
 import path from 'path';
 import { createReadStream, readdirSync, statSync } from 'fs';
 import archiver from "archiver";
@@ -17,7 +16,6 @@ const indexFormat = () => index === 0 ? '' : `_${index + 1}`
 const winToLinux = path => path.replace(/\\/g, '/').replace(/^([a-zA-Z]):/, '');
 
 const DIRECTORY_PATH = process.env.DIRECTORY_PATH;
-
 if (!DIRECTORY_PATH) {
     console.error('Error: DIRECTORY_PATH config is not defined in the environment variables.');
     process.exit(1); // Exit the process with an error code
@@ -91,71 +89,24 @@ if (!webdavClients.length) {
     process.exit(1); // Exit the process with an error code
 }
 
-const uploadQueue: string[] = [];
-/** размер данных переданных на отправку */
 let totalBytesBatched = 0;
-/** размер переданных на сервер данных  */
 let totalBytesUploaded = 0;
 let startTime: number;
-
-const filesSizes = {}
-const visited = new Set();
+let totalSize = 0;
 
 const ignore = ['/users/macuser/Library']
-
-
-// const zipToBuffer = (source, maxSize) => {
-//     return new Promise((resolve, reject) => {
-//         const archive = archiver('zip', { zlib: { level: 9 } });
-//         const buffers = [];
-
-//         // listen for data and add it to the buffers array
-//         archive.on('data', chunk => buffers.push(chunk));
-
-//         archive.on('end', () => {
-//             const resultBuffer = Buffer.concat(buffers);
-//             resolve(resultBuffer);
-//         });
-
-//         archive.on('error', err => reject(err));
-
-//         // read the source directory
-//         fs.readdir(source, (err, files) => {
-//             if (err) return reject(err);
-
-//             files.forEach(file => {
-//                 const filePath = path.join(source, file);
-//                 const stats = fs.statSync(filePath);
-
-//                 // ignore files larger than maxSize (in bytes)
-//                 if (stats.size <= maxSize) {
-//                     archive.file(filePath, { name: file });
-//                 }
-//             });
-
-//             archive.finalize();
-//         });
-//     });
-// };
-
-const sourceDir = './your-folder'; // change this to your folder path
-const maxFileSize = 10 * 1024 * 1024; // 10 MB, adjust as needed
-
-// zipToBuffer(sourceDir, maxFileSize)
-//     .then(buffer => {
-//         // do something with the buffer, e.g., save to a file or send over a network
-//         writeFileSync('./output.zip', buffer);
-//         console.log('Zip file created in buffer and saved as output.zip');
-//     })
-//     .catch(err => console.error(err));
+const packs: Pack[] = [];
+let dirs = {};
+const uploadQueue: string[] = [];
+const filesSizes = {}
 
 interface Pack {
     files: string[],
     size: number,
     name: string
 }
-const packs: Pack[] = []
 
+const visited = new Set();
 function readDirectoryRecursively(dir: string, isRoot = true) {
     if (ignore.includes(dir)) return;
     if (visited.has(dir)) return; // avoid circular loop
@@ -197,6 +148,7 @@ function readDirectoryRecursively(dir: string, isRoot = true) {
                 pack.size += stats.size;
             } else {
                 filesSizes[filePath] = stats.size;
+                totalSize += stats.size;
                 uploadQueue.push(filePath);
             }
 
@@ -209,7 +161,6 @@ function readDirectoryRecursively(dir: string, isRoot = true) {
     }
 }
 
-let dirs = {};
 
 
 function createDirectory(dir: string) {
@@ -303,9 +254,9 @@ async function manageUploads() {
     let batch = new Set<string>();
 
     let minQueuedBytes = 1000000; // 1mb
-    let maxQueuedBytes = 10000000; // 10mb
+    let maxQueuedBytes = 20000000; // 10mb
     let minBatchSize = 2;
-    let maxBatchSize = 20;
+    let maxBatchSize = 30;
 
     let limitQueuedBytes = maxQueuedBytes;
     let limitBatchSize = maxBatchSize;
@@ -317,7 +268,7 @@ async function manageUploads() {
         console.log(`Uploaded ${totalBytesUploaded / 1000000} mb in ${Date.now() - startTime}ms. Speed: ${speed / 1000000} mb/s.`);
 
         const queuedBytes = totalBytesBatched - totalBytesUploaded;
-        console.log(`Batched ${batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${limitBatchSize}, limitQueuedBytes: ${limitQueuedBytes / 1000000} mb`);
+        console.log(`Batched ${batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${limitBatchSize}, limitQueuedBytes: ${limitQueuedBytes / 1000000} mb, totalSize: ${totalSize / 1000000} mb, queue files: ${uploadQueue.length}`);
         console.log(Array.from(batch).map(file => `${path.basename(file)} (${filesSizes[file] / 1000000} mb)`).join('\n'));
     }, 1000);
 

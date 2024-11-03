@@ -16,7 +16,6 @@
   "dependencies": {
     "@dotenvx/dotenvx": "^1.14.2",
     "archiver": "^7.0.1",
-    "fs-posix": "^6.0.0",
     "webdav": "^5.7.1"
   },
   "devDependencies": {
