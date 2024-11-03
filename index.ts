@@ -1,32 +1,96 @@
-import { createClient } from 'webdav';
+import { createClient, type WebDAVClient } from 'webdav';
 import fs from 'fs/promises';
 import path from 'path';
-import { readdirSync, statSync } from 'fs';
+import { createReadStream, readdirSync, statSync } from 'fs';
+import archiver from "archiver";
+import { Writable } from 'stream';
 
-const WEBDAV_URL = process.env.WEBDAV_URL;
-if (!WEBDAV_URL) {
-	console.error('Error: WEBDAV_URL is not defined in the environment variables.');
-	process.exit(1); // Exit the process with an error code
+interface WebDAVClientWithLimit extends WebDAVClient {
+    index: number;
+    minSize: number;
+    maxSize: number;
 }
 
-const WEBDAV_USERNAME = process.env.WEBDAV_USERNAME;
-if (!WEBDAV_USERNAME) {
-	console.error('Error: WEBDAV_USERNAME is not defined in the environment variables.');
-	process.exit(1); // Exit the process with an error code
+const webdavClients: WebDAVClientWithLimit[] = [];
+let index = 0;
+const indexFormat = () => index === 0 ? '' : `_${index + 1}`
+const winToLinux = path => path.replace(/\\/g, '/').replace(/^([a-zA-Z]):/, '');
+
+const DIRECTORY_PATH = process.env.DIRECTORY_PATH;
+
+if (!DIRECTORY_PATH) {
+    console.error('Error: DIRECTORY_PATH config is not defined in the environment variables.');
+    process.exit(1); // Exit the process with an error code
 }
 
-const WEBDAV_PASSWORD = process.env.WEBDAV_PASSWORD;
-if (!WEBDAV_PASSWORD) {
-	console.error('Error: WEBDAV_PASSWORD is not defined in the environment variables.');
-	process.exit(1); // Exit the process with an error code
+if (!process.env.PACK_FILES_SMALLER_THAN) {
+    console.error('Error: PACK_FILES_SMALLER_THAN config is not defined in the environment variables.');
+    process.exit(1); // Exit the process with an error code
+}
+const PACK_FILES_SMALLER_THAN = parseInt(process.env.PACK_FILES_SMALLER_THAN);
+
+if (!process.env.PACK_SIZE) {
+    console.error('Error: PACK_SIZE config is not defined in the environment variables.');
+    process.exit(1); // Exit the process with an error code
+}
+const PACK_SIZE = parseInt(process.env.PACK_SIZE);
+
+while (process.env[`WEBDAV_URL${indexFormat()}`]) {
+    const url = process.env[`WEBDAV_URL${indexFormat()}`];
+    const username = process.env[`WEBDAV_USERNAME${indexFormat()}`];
+    const password = process.env[`WEBDAV_PASSWORD${indexFormat()}`];
+    const minSize = process.env[`WEBDAV_FILE_MIN_SIZE${indexFormat()}`];
+    const maxSize = process.env[`WEBDAV_FILE_MAX_SIZE${indexFormat()}`];
+
+    if (!url) {
+        console.error('Error: WEBDAV_URL is not defined in the environment variables.');
+        process.exit(1); // Exit the process with an error code
+    }
+
+    if (!username) {
+        console.error('Error: WEBDAV_USERNAME is not defined in the environment variables.');
+        process.exit(1); // Exit the process with an error code
+    }
+
+    if (!password) {
+        console.error('Error: WEBDAV_PASSWORD is not defined in the environment variables.');
+        process.exit(1); // Exit the process with an error code
+    }
+
+    if (!minSize) {
+        console.error('Error: WEBDAV_FILE_MIN_SIZE is not defined in the environment variables.');
+        process.exit(1); // Exit the process with an error code
+    }
+
+    if (!maxSize) {
+        console.error('Error: WEBDAV_FILE_MAX_SIZE is not defined in the environment variables.');
+        process.exit(1); // Exit the process with an error code
+    }
+
+    const client = createClient(url, { username, password }) as WebDAVClientWithLimit;
+    client.index = index;
+    client.minSize = parseInt(minSize);
+    client.maxSize = parseInt(maxSize);
+    webdavClients.push(client);
+    index++;
+}
+const client = (size = 0) => {
+    return webdavClients[1]
+    const clients = webdavClients.filter(client => size >= client.minSize && size <= client.maxSize);
+    const index = Math.floor(Math.random() * clients.length);
+    const client = clients[index];
+
+    if (!client) {
+        throw new Error('No webdav clients available');
+    }
+    return client
+};
+
+if (!webdavClients.length) {
+    console.error('Error: WEBDAV config is not defined in the environment variables.');
+    process.exit(1); // Exit the process with an error code
 }
 
-const client = createClient(WEBDAV_URL, {
-    username: WEBDAV_USERNAME,
-    password: WEBDAV_PASSWORD,
-});
-
-const directoryPath = '/users/macuser';
 const uploadQueue: string[] = [];
 /** размер данных переданных на отправку */
 let totalBytesBatched = 0;
@@ -39,42 +103,126 @@ const visited = new Set();
 
 const ignore = ['/users/macuser/Library']
 
-function readDirectoryRecursively(dir: string) {
-    if(ignore.includes(dir)) return;
+
+// const zipToBuffer = (source, maxSize) => {
+//     return new Promise((resolve, reject) => {
+//         const archive = archiver('zip', { zlib: { level: 9 } });
+//         const buffers = [];
+
+//         // listen for data and add it to the buffers array
+//         archive.on('data', chunk => buffers.push(chunk));
+
+//         archive.on('end', () => {
+//             const resultBuffer = Buffer.concat(buffers);
+//             resolve(resultBuffer);
+//         });
+
+//         archive.on('error', err => reject(err));
+
+//         // read the source directory
+//         fs.readdir(source, (err, files) => {
+//             if (err) return reject(err);
+
+//             files.forEach(file => {
+//                 const filePath = path.join(source, file);
+//                 const stats = fs.statSync(filePath);
+
+//                 // ignore files larger than maxSize (in bytes)
+//                 if (stats.size <= maxSize) {
+//                     archive.file(filePath, { name: file });
+//                 }
+//             });
+
+//             archive.finalize();
+//         });
+//     });
+// };
+
+const sourceDir = './your-folder'; // change this to your folder path
+const maxFileSize = 10 * 1024 * 1024; // 10 MB, adjust as needed
+
+// zipToBuffer(sourceDir, maxFileSize)
+//     .then(buffer => {
+//         // do something with the buffer, e.g., save to a file or send over a network
+//         writeFileSync('./output.zip', buffer);
+//         console.log('Zip file created in buffer and saved as output.zip');
+//     })
+//     .catch(err => console.error(err));
+
+interface Pack {
+    files: string[],
+    size: number,
+    name: string
+}
+const packs: Pack[] = []
+
+function readDirectoryRecursively(dir: string, isRoot = true) {
+    if (ignore.includes(dir)) return;
     if (visited.has(dir)) return; // avoid circular loop
     visited.add(dir);
 
+    const pushLastPack = () => {
+        uploadQueue.push(packs[packs.length - 1].name);
+        filesSizes[packs[packs.length - 1].name] = packs[packs.length - 1].size;
+    }
+
     readdirSync(dir).forEach(file => {
+        file = winToLinux(file);
         const filePath = path.join(dir, file);
         const stats = statSync(filePath);
         if (stats.isDirectory()) {
             try {
-                readDirectoryRecursively(filePath);
+                readDirectoryRecursively(filePath, false);
             } catch (error) {
                 // console.warn(error);
                 console.log('Error reading directory:', filePath);
                 return
             }
         } else {
-            filesSizes[filePath] = stats.size;
-            uploadQueue.push(filePath);
+            if (stats.size < PACK_FILES_SMALLER_THAN) {
+                const randomString = () => Math.random().toString(36).substring(2, 5)
+                if (packs.length === 0) {
+                    packs.push({ name: `pack_0.${randomString()}.zip`, files: [], size: 0 });
+                }
+                let pack = packs[packs.length - 1]
+
+                if (pack.size + stats.size > PACK_SIZE) {
+                    pushLastPack();
+
+                    packs.push({ files: [], size: 0, name: `pack_${packs.length}.${randomString()}.zip` });
+                }
+
+                pack = packs[packs.length - 1];
+                pack.files.push(filePath);
+                pack.size += stats.size;
+            } else {
+                filesSizes[filePath] = stats.size;
+                uploadQueue.push(filePath);
+            }
+
         }
     });
+
+
+    if (isRoot && packs.length > 0) {
+        pushLastPack()
+    }
 }
 
 let dirs = {};
 
+
 function createDirectory(dir: string) {
-    if (dir === '.' || dir === '/') {
+    if (dir === '.' || dir === '/' || dir.endsWith(':\\')) {
         return Promise.resolve();
     }
 
     if (!dirs[dir]) {
-        console.log({dir});
+        console.log({ dir });
 
-        dirs[dir] = (async ()=>{
+        dirs[dir] = (async () => {
             await createDirectory(path.dirname(dir));
-            await client.createDirectory(dir);
+            await client(0).createDirectory(winToLinux(dir));
         })()
     }
 
@@ -82,26 +230,70 @@ function createDirectory(dir: string) {
 }
 
 const tick = {
-    update: ()=>{}, 
-error: (e)=>{
-    console.log('error')
-}};
+    update: () => { },
+    error: (e) => {
+        console.log('error')
+    }
+};
 
-async function uploadFile(filePath: string) {
-    const fileStream = await fs.readFile(filePath);
+/**
+ * @param {archiver.Archiver} archive
+ */
+async function toBuffer(archive) {
+    // create writable and save chunks
+    /** @type {Uint8Array[]} */
+    const chunks = [];
+    const writable = new Writable();
+    writable._write = (chunk, encoding, callback) => {
+      // save to array to concatenate later
+      chunks.push(chunk);
+      callback();
+    };
+  
+    // pipe to writable
+    archive.pipe(writable);
+    await archive.finalize();
+  
+    // once done, concatenate chunks
+    return Buffer.concat(chunks);
+  }
 
-    // create directory if it doesn't exist
-    const dir = path.dirname(filePath);
-    // console.log(`Start ${filePath} (${fileStats.size} bytes)`);
-    // console.log(`Creating directory ${dir}`);
-    await createDirectory(dir);
-    // console.log(`Uploading ${filePath} (${fileStats.size} bytes)`);
-    const res = await client.putFileContents(filePath, fileStream, {overwrite: true});
-   
-    if (res !== true) {
-        console.error('Error uploading file:', filePath, res);
+const createArchive = async (pack: Pack) => {
+    const archive = archiver.create('zip', { zlib: { level: 1 } });
+    pack.files.forEach(file => {
+        archive.file(file, { name: file })
+    })
+
+    return toBuffer(archive);
+}
+
+async function uploadFile(file: string) {
+    let data;
+
+    const pack = packs.find(pack => pack.name === file)
+    if (pack) {
+        data = await createArchive(pack);
+    } else {
+        data = createReadStream(file);
     }
 
+    // create directory if it doesn't exist
+    // console.log(`Start ${filePath} (${fileStats.size} bytes)`);
+    // console.log(`Creating directory ${dir}`);
+    const dir = path.dirname(file);
+    await createDirectory(dir);
+    // console.log(`Uploading ${filePath} (${fileStats.size} bytes)`);
+    const clientInstanse = client(filesSizes[file]);
+    try {
+        const res = await clientInstanse.putFileContents(winToLinux(file), data, { overwrite: true });
+
+        if (res !== true) {
+            console.error('Error uploading file:', file, res);
+        }
+    } catch (error) {
+        console.log(`client: ${clientInstanse.index}`, `file: ${file}`, `error: ${error}`);
+        throw error
+    }
 }
 
 async function manageUploads() {
@@ -111,9 +303,9 @@ async function manageUploads() {
     let batch = new Set<string>();
 
     let minQueuedBytes = 1000000; // 1mb
-    let maxQueuedBytes = 1000000000; // 1000mb
-    let minBatchSize = 1;
-    let maxBatchSize = 300;
+    let maxQueuedBytes = 10000000; // 10mb
+    let minBatchSize = 2;
+    let maxBatchSize = 20;
 
     let limitQueuedBytes = maxQueuedBytes;
     let limitBatchSize = maxBatchSize;
@@ -121,9 +313,9 @@ async function manageUploads() {
     let dateStart = new Date().getTime();
     const interval = setInterval(() => {
         const speed = (totalBytesUploaded) / ((new Date().getTime() - dateStart) / 1000);
-    
+
         console.log(`Uploaded ${totalBytesUploaded / 1000000} mb in ${Date.now() - startTime}ms. Speed: ${speed / 1000000} mb/s.`);
-        
+
         const queuedBytes = totalBytesBatched - totalBytesUploaded;
         console.log(`Batched ${batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${limitBatchSize}, limitQueuedBytes: ${limitQueuedBytes / 1000000} mb`);
         console.log(Array.from(batch).map(file => `${path.basename(file)} (${filesSizes[file] / 1000000} mb)`).join('\n'));
@@ -151,9 +343,9 @@ async function manageUploads() {
             }).catch((e) => {
                 console.error(e);
                 batch.delete(file);
-                
-                limitBatchSize = Math.max(minBatchSize, limitBatchSize/1.1);
-                limitQueuedBytes =  Math.max(minQueuedBytes, limitQueuedBytes/1.1);
+
+                limitBatchSize = Math.max(minBatchSize, limitBatchSize / 1.1);
+                limitQueuedBytes = Math.max(minQueuedBytes, limitQueuedBytes / 1.1);
 
                 totalBytesBatched -= fileSize;
                 uploadQueue.unshift(file);
@@ -174,7 +366,7 @@ async function manageUploads() {
     clearInterval(interval);
 }
 
-readDirectoryRecursively(directoryPath);
+readDirectoryRecursively(DIRECTORY_PATH);
 console.log(dirs);
 
 
