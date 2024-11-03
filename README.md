@@ -11,7 +11,7 @@
 1. Create a `.env` configuration (see example: `.env copy`).
 2. Run `npm i`.
 3. Run `npm run start`.
-4. The server will shut down upon completion of the upload.
+4. The script will shut down upon completion of the upload.
 
 ## Implementation Details:
 1. There is no capability for resuming uploads or restarting after the script is interrupted.
