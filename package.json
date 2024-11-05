@@ -16,6 +16,7 @@
   "dependencies": {
     "@dotenvx/dotenvx": "^1.14.2",
     "archiver": "^7.0.1",
+    "lmdb": "^3.1.4",
     "webdav": "^5.7.1"
   },
   "devDependencies": {
