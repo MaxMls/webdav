@@ -1,6 +1,6 @@
 import { createClient, type WebDAVClient } from "webdav";
 
-const DRY_RUN = true;
+const DRY_RUN = false;
 
 interface WebDAVClientWithLimit extends WebDAVClient {
     index: number;

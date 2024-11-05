@@ -29,6 +29,7 @@ class Upload {
     private totalBytesUploaded: number;
     private startTime: number;
     private webdav: WebDAV;
+    private batchInfo: Set<File>;
 
     constructor(dir: string) {
         this.dir = dir;
@@ -53,6 +54,8 @@ class Upload {
         this.startTime = Date.now();
 
         this.webdav = new WebDAV();
+
+        this.batchInfo = new Set();
     }
 
 
@@ -78,14 +81,14 @@ class Upload {
     }
 
     private uploadFile = async (file: File) => {
-        const data = file.data ?? createReadStream(file.file);
+        const data = file.data ? await file.data() : createReadStream(file.file);
 
         const dir = path.dirname(file.file);
         await this.createDirectory(dir);
 
         const clientInstanse = this.webdav.client(file.size);
         try {
-            const res = await clientInstanse.putFileContents(winToLinux(file.file), data, { overwrite: true, contentLength: file.size });
+            const res = await clientInstanse.putFileContents(winToLinux(file.file), data, { overwrite: true });
 
             if (res !== true) {
                 console.error('Error uploading file:', file, res);
@@ -109,13 +112,13 @@ class Upload {
     private fileProcessingBatched = async (file: File) => {
         const promise = this.fileProcessing(file);
         this.batch.add(promise);
+        this.batchInfo.add(file); // log
         await promise;
         this.batch.delete(promise);
+        this.batchInfo.delete(file); // log
     }
 
     private fileProcessing = async (file: File) => {
-        
-
         try {
             this.totalBytesBatched += file.size;
             await this.uploadFile(file);
@@ -144,12 +147,12 @@ class Upload {
 
         const queuedBytes = this.totalBytesBatched - this.totalBytesUploaded;
         console.log(`Batched ${this.batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${this.limitBatchSize}, limitQueuedBytes: ${this.limitQueuedBytes / 1000000} mb`);
-        // console.log(Array.from(batch).map(file => `${path.basename(file)} (${filesSizes[file] / 1000000} mb)`).join('\n'));
+        console.log(Array.from(this.batchInfo).map(file => `${path.basename(file.file)} (${file.size / 1000000} mb)`).join('\n'));
     }
 
 
     start = async () => {
-        this.interval = setInterval(this.log, 1000);
+        this.interval = setInterval(this.log, 2000);
 
         for await (const file of this.queueIterator(this.dir)) {
 

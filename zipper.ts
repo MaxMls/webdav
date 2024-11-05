@@ -48,30 +48,33 @@ class Pack {
     files: string[];
     size: number;
     name: string;
-    constructor(index) {
+    index: number;
+    constructor(index: number = 0) {
+        this.index = index;
         this.files = [];
         this.size = 0;
         this.name = `pack.${index}.${Math.random().toString(36).substring(2, 11)}.zip`;
     }
 
-    async file() {
-        const buffer = await createArchive(this.files);
-        return { file: this.name, size: buffer.byteLength, data: buffer }
-        
-        // return { file: this.name, size: this.size }
+    file = async () => {
+        //const buffer = await createArchive(this.files);
+        // return { file: this.name, size: buffer.byteLength, data: buffer }
+
+        return { file: this.name, size: this.size, data: () => createArchive(this.files) }
     }
 
-    async push(file: File) {
+    push = async (file: File) => {
         this.files.push(file.file);
         await fileStateDB.put(file.file, this.name);
         this.size += file.size;
     }
+
+    newPack = () => new Pack(this.index + 1)
 }
 
 
 export const fileZipperIterator = async function* (dir: string): AsyncIterableIterator<File> {
-    let index = 0;
-    let pack: Pack = new Pack(index);
+    let pack: Pack = new Pack();
 
     const pushPack = async function* () {
         if (!pack.files) {
@@ -79,7 +82,7 @@ export const fileZipperIterator = async function* (dir: string): AsyncIterableIt
         }
 
         yield pack.file();
-        pack = new Pack(index++);
+        pack = pack.newPack();
     }
 
     for await (const file of readDirectoryRecursivelyAsyncIterator(dir)) {
