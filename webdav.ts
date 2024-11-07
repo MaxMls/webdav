@@ -74,6 +74,9 @@ export class WebDAV {
                     console.log(dir);
                     return true
                 },
+                exists: (file: string) => {
+                    throw new Error('Not implemented')
+                },
                 index: -1
             }
         }

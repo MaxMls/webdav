@@ -187,6 +187,8 @@ class Upload {
             }
             this.fileProcessingBatched(file);
         }
+        
+        console.log('All files uploaded.');
         clearInterval(this.interval);
     }
 
