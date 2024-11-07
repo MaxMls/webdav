@@ -12,7 +12,9 @@ export const winToLinux = path => path.replace(/\\/g, '/').replace(/^([a-zA-Z]):
 export interface File {
     file: string,
     size: number,
-    data?: () => Promise<Buffer>
+    data?: () => Promise<Buffer>,
+    promise?: Promise<void>,
+    status?: string
 }
 
 export const readDirectoryRecursivelyAsyncIterator = async function* (dir: string, visited = new Set<string>()): AsyncIterableIterator<File> {

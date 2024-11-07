@@ -56,7 +56,7 @@ class Pack {
         this.name = `pack.${index}.${Math.random().toString(36).substring(2, 11)}.zip`;
     }
 
-    file = async () => {
+    file = () => {
         //const buffer = await createArchive(this.files);
         // return { file: this.name, size: buffer.byteLength, data: buffer }
 

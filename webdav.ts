@@ -63,7 +63,7 @@ export class WebDAV {
         }
     }
 
-    client = (size = 0) => {
+    client = (size = 0): WebDAVClientWithLimit => {
         if (DRY_RUN) {
             return {
                 putFileContents: (file) => {

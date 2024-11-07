@@ -1,5 +1,5 @@
 import path from 'path';
-import { createReadStream } from 'fs';
+import { createReadStream, ReadStream } from 'fs';
 import { open } from 'lmdb'; // or require
 import { type File, winToLinux } from './common.ts';
 import { WebDAV } from './webdav.ts';
@@ -22,14 +22,12 @@ class Upload {
     private dateStart: number;
     private failedFiles: File[];
     private interval: NodeJS.Timeout;
-    private batch: Set<Promise<void>>;
+    private batch: Set<File>;
     private dir: string;
     private dirs: Record<string, Promise<void>>;
-    private totalBytesBatched: number;
-    private totalBytesUploaded: number;
     private startTime: number;
     private webdav: WebDAV;
-    private batchInfo: Set<File>;
+    private totalBytesUploaded: number;
 
     constructor(dir: string) {
         this.dir = dir;
@@ -46,16 +44,13 @@ class Upload {
         this.failedFiles = [];
 
         this.interval = setInterval(this.log, 1000);
-        this.batch = new Set<Promise<void>>();
+        this.batch = new Set();
 
-
-        this.totalBytesBatched = 0;
-        this.totalBytesUploaded = 0;
         this.startTime = Date.now();
 
         this.webdav = new WebDAV();
 
-        this.batchInfo = new Set();
+        this.totalBytesUploaded = 0;
     }
 
 
@@ -81,19 +76,48 @@ class Upload {
     }
 
     private uploadFile = async (file: File) => {
-        const data = file.data ? await file.data() : createReadStream(file.file);
+        const clientInstanse = this.webdav.client(0);
+        file.status = 'check if file exists';
+        const exists = await clientInstanse.exists(winToLinux(file.file));
+        if (exists) {
+            file.status = 'done uploading file exists';
+            return;
+        }
 
+        let data: ReadStream | Buffer;
+        if (file.data) {
+            file.status = 'data fetching';
+            data = await file.data()
+            file.status = 'done data fetching';
+            file.size = data.byteLength;
+        } else {
+            data = createReadStream(file.file);
+        }
+
+        file.status = 'creating directory';
         const dir = path.dirname(file.file);
         await this.createDirectory(dir);
+        file.status = 'done creating directory';
 
-        const clientInstanse = this.webdav.client(file.size);
         try {
-            const res = await clientInstanse.putFileContents(winToLinux(file.file), data, { overwrite: true });
+            file.status = 'uploading';
+            const res = await clientInstanse.putFileContents(winToLinux(file.file), data, {
+                overwrite: false,
+                contentLength: file.size,
+                onUploadProgress: (event) => {
+                    file.status = 'uploading ' + (event.loaded / file.size) * 100 + '%'
+                }
+            });
+            file.status = 'done uploading';
 
             if (res !== true) {
-                console.error('Error uploading file:', file, res);
+                file.status = 'file already exists';
+                console.warn('File already exists:', file, res);
+            } else{
+                this.totalBytesUploaded += file.size;
             }
         } catch (error) {
+            file.status = 'error uploading: ' + error;
             console.log(`client: ${clientInstanse.index}`, `file: ${file}`, `error: ${error}`);
             throw error
         }
@@ -110,32 +134,26 @@ class Upload {
     }
 
     private fileProcessingBatched = async (file: File) => {
-        const promise = this.fileProcessing(file);
-        this.batch.add(promise);
-        this.batchInfo.add(file); // log
-        await promise;
-        this.batch.delete(promise);
-        this.batchInfo.delete(file); // log
+        this.batch.add(file);
+        file.promise = this.fileProcessing(file);
+        await file.promise;
+        this.batch.delete(file);
+        delete file.promise;
     }
 
     private fileProcessing = async (file: File) => {
         try {
-            this.totalBytesBatched += file.size;
             await this.uploadFile(file);
             // console.log(`(${file.size / 1000000} MB) ${file.file}`);
 
             this.limitBatchSize = Math.min(this.maxBatchSize, this.limitBatchSize * 1.2);
             this.limitQueuedBytes = Math.min(this.maxQueuedBytes, this.limitQueuedBytes * 1.2);
 
-            this.totalBytesUploaded += file.size;
-
             await fileStateDB.put(file.file, 'done');
         } catch (error) {
             console.error(error);
             this.limitBatchSize = Math.max(this.minBatchSize, this.limitBatchSize / 1.1);
             this.limitQueuedBytes = Math.max(this.minQueuedBytes, this.limitQueuedBytes / 1.1);
-            this.totalBytesBatched -= file.size;
-
             this.failedFiles.push(file);
         }
     }
@@ -145,11 +163,11 @@ class Upload {
 
         console.log(`Uploaded ${this.totalBytesUploaded / 1000000} mb in ${Date.now() - this.startTime}ms. Speed: ${speed / 1000000} mb/s.`);
 
-        const queuedBytes = this.totalBytesBatched - this.totalBytesUploaded;
-        console.log(`Batched ${this.batch.size} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${this.limitBatchSize}, limitQueuedBytes: ${this.limitQueuedBytes / 1000000} mb`);
-        console.log(Array.from(this.batchInfo).map(file => `${path.basename(file.file)} (${file.size / 1000000} mb)`).join('\n'));
+        const batch = Array.from(this.batch);
+        const queuedBytes = Array.from(this.batch).reduce((acc, file) => acc + file.size, 0);
+        console.log(`Batched ${batch.length} files, size: ${queuedBytes / 1000000} mb limitBatchSize: ${this.limitBatchSize}, limitQueuedBytes: ${this.limitQueuedBytes / 1000000} mb`);
+        console.log(batch.map(file => `${path.basename(file.file)} (${file.size / 1000000} mb) ${file.status}`).join('\n'));
     }
-
 
     start = async () => {
         this.interval = setInterval(this.log, 2000);
@@ -161,11 +179,11 @@ class Upload {
                 if (this.batch.size === 0) {
                     break;
                 }
-
-                if (this.totalBytesBatched - this.totalBytesUploaded < this.limitQueuedBytes && this.batch.size < this.limitBatchSize) {
+                const batchSize = Array.from(this.batch).reduce((acc, file) => acc + file.size, 0);
+                if (batchSize < this.limitQueuedBytes && this.batch.size < this.limitBatchSize) {
                     break;
                 }
-                await Promise.any(this.batch);
+                await Promise.any(Array.from(this.batch).map(file => file.promise));
             }
             this.fileProcessingBatched(file);
         }
